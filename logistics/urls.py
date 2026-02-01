@@ -16,4 +16,6 @@ urlpatterns = [
     path('calculate-route/', views.calculate_route, name='calculate-route'),
     path('locations/<int:location_id>/reachable/', views.get_reachable_destinations, name='reachable-destinations'),
     path('track/<str:tracking_id>/', views.track_package, name='track-package'),
+    path('calculate-route-async/', views.calculate_route_async_view, name='calculate-route-async'),
+    path('task-status/<str:task_id>/', views.task_status, name='task-status'),
 ]

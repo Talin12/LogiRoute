@@ -2,6 +2,8 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
+from celery.result import AsyncResult
+from .tasks import calculate_route_async
 
 from .models import LocationNode, RouteEdge, Package
 from .serializers import (
@@ -237,3 +239,75 @@ def track_package(request, tracking_id):
             {'error': f'Package with tracking ID {tracking_id} not found'},
             status=status.HTTP_404_NOT_FOUND
         )
+
+@api_view(['POST'])
+def calculate_route_async_view(request):
+    """
+    Async route calculation - returns task ID immediately.
+    Client can poll /api/task-status/{task_id}/ for result.
+    
+    POST /api/calculate-route-async/
+    Body: {
+        "source_id": 1,
+        "destination_id": 5,
+        "optimize_by": "time"
+    }
+    """
+    serializer = RouteCalculationRequestSerializer(data=request.data)
+    
+    if not serializer.is_valid():
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    source_id = serializer.validated_data['source_id']
+    destination_id = serializer.validated_data['destination_id']
+    optimize_by = serializer.validated_data.get('optimize_by', 'time')
+    
+    # Start async task
+    task = calculate_route_async.delay(source_id, destination_id, optimize_by)
+    
+    return Response({
+        'task_id': task.id,
+        'status': 'processing',
+        'check_status_url': f'/api/task-status/{task.id}/'
+    }, status=status.HTTP_202_ACCEPTED)
+
+
+@api_view(['GET'])
+def task_status(request, task_id):
+    """
+    Check status of an async task.
+    
+    GET /api/task-status/{task_id}/
+    """
+    task = AsyncResult(task_id)
+    
+    if task.state == 'PENDING':
+        response = {
+            'state': task.state,
+            'status': 'Task is waiting to be processed'
+        }
+    elif task.state == 'PROCESSING':
+        response = {
+            'state': task.state,
+            'status': task.info.get('status', 'Processing...')
+        }
+    elif task.state == 'SUCCESS':
+        response = {
+            'state': task.state,
+            'result': task.result
+        }
+    elif task.state == 'FAILURE':
+        response = {
+            'state': task.state,
+            'error': str(task.info)
+        }
+    else:
+        response = {
+            'state': task.state,
+            'status': 'Unknown state'
+        }
+    
+    return Response(response)
